@@ -107,6 +107,56 @@ RSpec.describe "Refresh Token Flow" do
       end
     end
 
+    context "with scopes configured" do
+      before do
+        default_scopes_exist :public
+        optional_scopes_exist :read, :write
+
+        authorization_code_exists application: @client,
+                                  resource_owner_id: resource_owner.id,
+                                  resource_owner_type: resource_owner.class.name,
+                                  scopes: 'public read write'
+      end
+
+      it "client gets the refresh token and refreshes it with reduced scopes" do
+        original_scopes = @authorization.scopes.to_s
+
+        post token_endpoint_url(code: @authorization.token, client: @client)
+        binding.break
+
+        token = Doorkeeper::AccessToken.last
+  
+        expect(json_response).to include(
+          "access_token" => token.token,
+          "refresh_token" => token.refresh_token,
+          "scope" => original_scopes
+        )
+  
+        expect(@authorization.reload).to be_revoked
+  
+        post refresh_token_endpoint_url(client: @client, refresh_token: token.refresh_token, scope: 'read')
+  
+        second_token = Doorkeeper::AccessToken.last
+        expect(json_response).to include(
+          "access_token" => second_token.token,
+          "refresh_token" => second_token.refresh_token,
+          "scope" => 'read'
+        )
+  
+        expect(token.token).not_to eq(second_token.token)
+        expect(token.refresh_token).not_to eq(second_token.refresh_token)
+
+        post refresh_token_endpoint_url(client: @client, refresh_token: token.refresh_token, scope: original_scopes)
+        
+        third_token = Doorkeeper::AccessToken.last
+        expect(json_response).to include(
+          "access_token" => third_token.token,
+          "refresh_token" => third_token.refresh_token,
+          "scope" => original_scopes
+        )
+      end
+    end
+
     context "with public & private clients" do
       let(:public_client) do
         FactoryBot.create(
